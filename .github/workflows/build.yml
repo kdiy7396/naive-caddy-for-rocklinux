@@ -81,14 +81,19 @@ jobs:
           WantedBy=multi-user.target
           SERVICE_EOF
 
-          # 打包成 tar.gz
-          tar -czf caddy-naive.tar.gz -C package .
+          # 强制创建顶层目录打包（规范，避免 tar-bomb）
+          mkdir -p staging/caddy-naive
+          cp -r package/* staging/caddy-naive/
+
+          tar -czf caddy-naive.tar.gz -C staging caddy-naive
+
+          rm -rf staging
 
           mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           mv caddy-naive.tar.gz rpmbuild/SOURCES/
 
-      - name: Create RPM spec file
-        run: |
+          - name: Create RPM spec file
+            run: |
           cat > rpmbuild/SPECS/caddy-naive.spec <<'SPEC_EOF'
           Name:           caddy-naive
           Version:        2.11.1
@@ -114,9 +119,7 @@ jobs:
           exit 0
 
           %prep
-          %setup -q -T
-          tar -xzf %{SOURCE0} -C .
-          ls -la
+          %setup -q   # 默认会 cd 到 caddy-naive （因为 tarball 有顶层 caddy-naive/）
 
           %install
           mkdir -p %{buildroot}/usr/bin
@@ -125,9 +128,9 @@ jobs:
           mkdir -p %{buildroot}/var/lib/caddy
           mkdir -p %{buildroot}/var/log/caddy
 
-          cp -p usr/bin/caddy %{buildroot}/usr/bin/caddy
-          cp -p etc/caddy/Caddyfile %{buildroot}/etc/caddy/Caddyfile
-          cp -p usr/lib/systemd/system/caddy-naive.service %{buildroot}/usr/lib/systemd/system/caddy-naive.service
+          cp -p caddy-naive/usr/bin/caddy %{buildroot}/usr/bin/caddy
+          cp -p caddy-naive/etc/caddy/Caddyfile %{buildroot}/etc/caddy/Caddyfile
+          cp -p caddy-naive/usr/lib/systemd/system/caddy-naive.service %{buildroot}/usr/lib/systemd/system/caddy-naive.service
 
           %files
           /usr/bin/caddy
@@ -137,10 +140,7 @@ jobs:
           %attr(0750,caddy,caddy) /var/log/caddy
 
           %post
-          # 授予绑定低端口能力（非root用户需要）
           setcap cap_net_bind_service=+ep /usr/bin/caddy 2>/dev/null || true
-
-          # 确保目录权限（幂等）
           chown -R caddy:caddy /var/lib/caddy /var/log/caddy 2>/dev/null || true
 
           %changelog
@@ -148,21 +148,21 @@ jobs:
           - Initial RPM with Naive forwardproxy, dedicated caddy user/group
           SPEC_EOF
           
-      - name: Build RPM
-        run: |
-          rpmbuild -ba \
-            --define "_topdir $(pwd)/rpmbuild" \
-            rpmbuild/SPECS/caddy-naive.spec
+          - name: Build RPM
+              run: |
+              rpmbuild -ba \
+              --define "_topdir $(pwd)/rpmbuild" \
+              rpmbuild/SPECS/caddy-naive.spec
 
-      - name: Upload RPM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: caddy-naive-rpm
-          path: rpmbuild/RPMS/**/caddy-naive-*.rpm
-          if-no-files-found: error
+          - name: Upload RPM artifact
+              uses: actions/upload-artifact@v4
+                with:
+                  name: caddy-naive-rpm
+                  path: rpmbuild/RPMS/**/caddy-naive-*.rpm
+                  if-no-files-found: error
 
-      - name: Create GitHub Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: rpmbuild/RPMS/**/caddy-naive-*.rpm
+          - name: Create GitHub Release (on tag)
+              if: startsWith(github.ref, 'refs/tags/')
+              uses: softprops/action-gh-release@v2
+                with:
+                  files: rpmbuild/RPMS/**/caddy-naive-*.rpm
