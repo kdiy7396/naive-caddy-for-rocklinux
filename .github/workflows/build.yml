@@ -1,10 +1,10 @@
 name: Build Naive-Caddy RPM
 
 on:
-  workflow_dispatch:          # 手动触发
+  workflow_dispatch:  # 手动触发
   # push:
   #   tags:
-  #     - 'v*.*.*'           # 可选：tag 时自动构建并 release
+  #     - 'v*.*.*'  # 可选：tag 时自动 release
 
 jobs:
   build-rpm:
@@ -17,49 +17,52 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'   # 兼容性好；若要用最新 Caddy 可改成 '1.26'
+          go-version: '1.26'  # 兼容当前 Caddy
 
       - name: Install dependencies
         run: |
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
           sudo apt-get update
-          sudo apt-get install -y rpm rpm-build
+          sudo apt-get install -y rpm
+          rpmbuild --version  # 确认 rpmbuild 可用
 
       - name: Build Caddy with Naive forwardproxy
         run: |
           ~/go/bin/xcaddy build \
             --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@naive
           chmod +x caddy
-          ./caddy version   # 打印版本确认构建成功
+          ./caddy version  # 打印版本确认
 
       - name: Prepare package files
         run: |
-          mkdir -p package/{usr/bin,etc/caddy,usr/lib/systemd/system}
+          mkdir -p package/{usr/bin,etc/caddy,usr/lib/systemd/system,var/lib/caddy,var/log/caddy}
 
           cp caddy package/usr/bin/
 
-          # 默认 Caddyfile（带 forward_proxy naive 配置）
-          cat <<'EOF' > package/etc/caddy/Caddyfile
+          # 默认 Caddyfile
+          cat > package/etc/caddy/Caddyfile <<'CADDY_EOF'
           {
               order forward_proxy before reverse_proxy
           }
 
           :443 {
               forward_proxy {
-                  basic_auth user pass     # 请自行修改用户名密码
+                  basic_auth user pass     # 请修改为真实用户名密码，或用环境变量
                   probe_resistance
               }
               file_server
           }
-          EOF
+          CADDY_EOF
 
-          # systemd 服务文件（推荐）
-          cat <<'EOF' > package/usr/lib/systemd/system/caddy-naive.service
+          # systemd service（用 caddy 用户运行，加强安全）
+          cat > package/usr/lib/systemd/system/caddy-naive.service <<'SERVICE_EOF'
           [Unit]
           Description=Caddy with Naive Forward Proxy
           After=network.target nss-lookup.target
 
           [Service]
+          User=caddy
+          Group=caddy
           Type=notify
           ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
           ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
@@ -67,18 +70,18 @@ jobs:
           LimitNOFILE=1048576
           LimitNPROC=512
           PrivateTmp=true
-          ProtectSystem=full
-          ReadWritePaths=/etc/caddy /var/lib/caddy
-          AmbientCapabilities=CAP_NET_BIND_SERVICE
-          User=root
-          Group=root
+          ProtectSystem=strict
+          ProtectHome=yes
+          PrivateDevices=yes
+          RestrictAddressFamilies=AF_INET AF_INET6
+          NoNewPrivileges=yes
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
-          EOF
+          SERVICE_EOF
 
-          # 打包成 tar.gz 供 rpmbuild 使用
+          # 打包成 tar.gz
           tar -czf caddy-naive.tar.gz -C package .
 
           mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
@@ -86,9 +89,9 @@ jobs:
 
       - name: Create RPM spec file
         run: |
-          cat <<'EOF' > rpmbuild/SPECS/caddy-naive.spec
+          cat > rpmbuild/SPECS/caddy-naive.spec <<'SPEC_EOF'
           Name:           caddy-naive
-          Version:        2.11.1                  # ← 建议更新到当前最新版（2026-02 为 v2.11.1）
+          Version:        2.11.1
           Release:        1%{?dist}
           Summary:        Caddy web server with klzgrad/forwardproxy (naive) plugin
           License:        Apache-2.0
@@ -97,7 +100,18 @@ jobs:
 
           %description
           Custom build of Caddy with the naive forward proxy plugin from klzgrad/forwardproxy@naive.
-          Includes a basic Caddyfile and systemd service unit.
+          Includes basic Caddyfile, systemd service, and dedicated caddy user/group.
+
+          %pre
+          getent group caddy >/dev/null || groupadd --system caddy
+          getent passwd caddy >/dev/null || useradd --system \
+              --gid caddy \
+              --create-home \
+              --home-dir /var/lib/caddy \
+              --shell /usr/sbin/nologin \
+              --comment "Caddy web server" \
+              caddy
+          exit 0
 
           %prep
           %setup -q -n caddy-naive
@@ -106,6 +120,8 @@ jobs:
           mkdir -p %{buildroot}/usr/bin
           mkdir -p %{buildroot}/etc/caddy
           mkdir -p %{buildroot}/usr/lib/systemd/system
+          mkdir -p %{buildroot}/var/lib/caddy
+          mkdir -p %{buildroot}/var/log/caddy
 
           cp -p usr/bin/caddy %{buildroot}/usr/bin/caddy
           cp -p etc/caddy/Caddyfile %{buildroot}/etc/caddy/Caddyfile
@@ -115,23 +131,28 @@ jobs:
           /usr/bin/caddy
           %config(noreplace) /etc/caddy/Caddyfile
           /usr/lib/systemd/system/caddy-naive.service
+          %attr(0750,caddy,caddy) /var/lib/caddy
+          %attr(0750,caddy,caddy) /var/log/caddy
 
           %post
-          # 尝试授予低端口绑定能力（容器环境可能失败，无需阻塞安装）
+          # 授予绑定低端口能力（非root用户需要）
           setcap cap_net_bind_service=+ep /usr/bin/caddy 2>/dev/null || true
+
+          # 确保目录权限（幂等）
+          chown -R caddy:caddy /var/lib/caddy /var/log/caddy 2>/dev/null || true
 
           %changelog
           * Fri Feb 27 2026 Your Name <you@example.com> - 2.11.1-1
-          - Initial RPM package with Naive forwardproxy
-          EOF
+          - Initial RPM with Naive forwardproxy, dedicated caddy user/group
+          SPEC_EOF
 
       - name: Build RPM
         run: |
           rpmbuild -ba \
             --define "_topdir $(pwd)/rpmbuild" \
             rpmbuild/SPECS/caddy-naive.spec
-          CADDY_VER=$(./caddy version | cut -d' ' -f2 | sed 's/^v//')
-          sed -i "s/Version:.*$/Version：$CADDY_VER/" rpmbuild/SPECS/caddy-naive.spec
+            CADDY_VER=$(./caddy version | awk '{print $2}' | sed 's/^v//')
+            sed -i "s/Version:.*$/Version:        $CADDY_VER/" rpmbuild/SPECS/caddy-naive.spec
 
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
@@ -145,8 +166,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: rpmbuild/RPMS/**/caddy-naive-*.rpm
-          # 可选：添加 tag 名称、body 等
-          # tag_name: ${{ github.ref_name }}
-          # name: Caddy Naive RPM ${{ github.ref_name }}
-          # body: |
-          #   Auto-built Caddy with Naive forwardproxy.
