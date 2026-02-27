@@ -114,7 +114,9 @@ jobs:
           exit 0
 
           %prep
-          %setup -q
+          %setup -q -T
+          tar -xzf %{SOURCE0} -C .
+          ls -la
 
           %install
           mkdir -p %{buildroot}/usr/bin
