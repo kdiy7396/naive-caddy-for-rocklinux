@@ -51,7 +51,7 @@ jobs:
               }
               file_server
           }
-EOF
+          EOF
 
           # systemd 服务文件（推荐）
           cat <<'EOF' > package/usr/lib/systemd/system/caddy-naive.service
@@ -76,7 +76,7 @@ EOF
 
           [Install]
           WantedBy=multi-user.target
-EOF
+          EOF
 
           # 打包成 tar.gz 供 rpmbuild 使用
           tar -czf caddy-naive.tar.gz -C package .
@@ -130,8 +130,8 @@ EOF
           rpmbuild -ba \
             --define "_topdir $(pwd)/rpmbuild" \
             rpmbuild/SPECS/caddy-naive.spec
-            CADDY_VER=$(./caddy version | cut -d' ' -f2 | sed 's/^v//')
-sed -i "s/Version:.*$/Version:        $CADDY_VER/" rpmbuild/SPECS/caddy-naive.spec
+          CADDY_VER=$(./caddy version | cut -d' ' -f2 | sed 's/^v//')
+          sed -i "s/Version:.*$/Version：$CADDY_VER/" rpmbuild/SPECS/caddy-naive.spec
 
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
