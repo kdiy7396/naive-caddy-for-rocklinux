@@ -114,7 +114,7 @@ jobs:
           exit 0
 
           %prep
-          %setup -q -n caddy-naive
+          %setup -q -C
 
           %install
           mkdir -p %{buildroot}/usr/bin
