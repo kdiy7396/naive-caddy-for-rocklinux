@@ -145,13 +145,6 @@ jobs:
           * Fri Feb 27 2026 Your Name <you@example.com> - 2.11.1-1
           - Initial RPM with Naive forwardproxy, dedicated caddy user/group
           SPEC_EOF
-
-      - name: Set dynamic Caddy version in spec
-        run: |
-          CADDY_VER=$(./caddy version | awk '{print $2}' | sed 's/^v//')
-          echo "Detected Caddy version: $CADDY_VER"
-          sed -i "s/Version:.*$/Version:        $CADDY_VER/" rpmbuild/SPECS/caddy-naive.spec
-          sed -i "s/- 2.11.1-1/- $CADDY_VER-1/" rpmbuild/SPECS/caddy-naive.spec  # 可选：也改 changelog
           
       - name: Build RPM
         run: |
